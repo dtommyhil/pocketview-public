@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% if not demo_mode %}<meta name="csrf-token" content="{{ session.csrf_token }}">{% endif %}
+  <title>Pocketview · Sandbox transactions</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% if not demo_mode %}
+  <script defer src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+  {% endif %}
+  <script defer src="{{ url_for('static', filename='vendor/chart.umd.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='charts.js') }}"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Pocketview home"><span class="brand-icon" aria-hidden="true">p.</span>Pocketview</a>
+    <span class="badge">{{ 'PORTFOLIO DEMO' if demo_mode else 'LOCAL DEMO' }}</span>
+  </header>
+  <main id="main">
+    <div class="intro">
+      <p class="eyebrow">Your dashboard</p>
+      <h1>Transactions &amp; spending.</h1>
+      <p class="subtitle">{{ 'Explore spending trends and search four months of sample activity.' if demo_mode else 'Explore your activity, understand your spending, and manage your bank connections.' }}</p>
+      <p class="sandbox-note"><span aria-hidden="true">●</span> {{ 'Interactive portfolio demo — fictional financial data.' if demo_mode else 'Sandbox demo — simulated financial data.' }}</p>
+    </div>
+
+    {% if demo_mode %}
+    <details class="project-details">
+      <summary>About Pocketview</summary>
+      <p>A personal finance dashboard built with Python, Flask, PostgreSQL, and Plaid Sandbox.
+        Explore the sample spending chart, search transactions, and change the date range.
+        This public demo uses fictional records. The full local app connects through Plaid Link,
+        imports transaction changes with atomic cursor updates, encrypts access tokens,
+        and repairs simulated sign-in failures through Link update mode.</p>
+    </details>
+    {% endif %}
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    {% if not plaid_configured and not demo_mode %}
+    <aside class="notice setup">
+      <strong>One local setup step left.</strong>
+      Add <code>PLAID_CLIENT_ID</code> and the Sandbox <code>PLAID_SECRET</code> to this project's
+      <code>.env</code>, then restart Flask. See the README for details.
+    </aside>
+    {% endif %}
+
+    <section class="connections bank-connections" aria-labelledby="accounts-heading">
+      <div class="section-header">
+        <div><h2 id="accounts-heading">{{ 'Sample accounts' if demo_mode else 'Bank connections' }}</h2><p class="section-description">{{ 'Two illustrative accounts for exploring the demo.' if demo_mode else 'Manage the banks supplying your activity.' }}</p></div>
+        {% if not demo_mode %}
+        <button id="connect" type="button" data-configured="{{ 'true' if plaid_configured else 'false' }}" disabled>+ Connect Sandbox bank</button>
+        {% endif %}
+      </div>
+      {% if items %}
+        {% for item in items %}
+        <article class="item">
+          <div class="item-heading">
+            <div>
+              <h3>{{ item.institution_name }}</h3>
+              {% if demo_mode %}
+              <p class="status">Sample data · no live bank connection</p>
+              {% elif item.connection_state in ['login_required', 'consent_required'] %}
+              <p class="status pending">{{ 'Sign-in needed' if item.connection_state == 'login_required' else 'Permission needed' }} · saved history is kept</p>
+              {% elif item.connection_state == 'revoked' %}
+              <p class="status pending">Access ended · saved history is kept until you remove this connection</p>
+              {% elif item.connection_state == 'error' %}
+              <p class="status pending">Connection needs attention · check its current status</p>
+              {% elif item.connection_state == 'connected' %}
+              <p class="status"><span aria-hidden="true">●</span> Connected · accounts saved locally</p>
+              {% else %}
+              <p class="status pending">Connection saved · accounts need loading</p>
+              {% endif %}
+            </div>
+            {% if not demo_mode %}<div class="item-actions">
+              {% if item.connection_state != 'accounts_pending' and item.connection_state != 'revoked' %}
+              <button class="secondary" type="button" data-action="sync" data-item="{{ item.id }}"
+                      {% if not plaid_configured %}disabled{% endif %}>Sync</button>
+              {% endif %}
+              {% if item.connection_state in ['login_required', 'consent_required'] %}
+              <button type="button" data-action="reconnect" data-item="{{ item.id }}"
+                      {% if not plaid_configured %}disabled{% endif %}>Reconnect</button>
+              {% endif %}
+              {% if item.connection_state != 'revoked' %}
+              <button class="text-button" type="button" data-action="health" data-item="{{ item.id }}"
+                      {% if not plaid_configured %}disabled{% endif %}>Check status</button>
+              {% endif %}
+              {% if item.connection_state == 'accounts_pending' %}
+              <button class="secondary" type="button" data-action="accounts" data-item="{{ item.id }}">Retry accounts</button>
+              {% endif %}
+              <button class="text-button" type="button" data-action="disconnect" data-item="{{ item.id }}"
+                      aria-label="Disconnect {{ item.institution_name }}">Disconnect</button>
+            </div>{% endif %}
+          </div>
+          <details class="account-details" {% if not item.accounts %}open{% endif %}>
+            <summary>
+              <span class="disclosure-chevron" aria-hidden="true"></span>
+              <span class="show-accounts">Show accounts</span><span class="hide-accounts">Hide accounts</span>
+              <span class="account-count">{{ item.accounts|length }}</span>
+            </summary>
+            <ul class="account-list">
+            {% for account in item.accounts %}
+            <li>
+              <span class="account-icon" aria-hidden="true">▤</span>
+              <div class="account-detail"><strong>{{ account.name }}</strong>
+                <span>{{ (account.subtype or account.type)|replace('_', ' ')|title }}{% if account.mask %} · ••{{ account.mask }}{% endif %}</span>
+              </div>
+              {% if account.currency_code %}<span class="currency">{{ account.currency_code }}</span>{% endif %}
+            </li>
+            {% else %}
+            <li class="muted">{% if item.connection_state == 'connected' %}Plaid returned no active accounts for this connection.{% else %}Use Retry accounts to finish loading this connection.{% endif %}</li>
+            {% endfor %}
+            </ul>
+            {% if item.accounts_loaded_at %}<p class="timestamp">Accounts retrieved {{ item.accounts_loaded_at.strftime('%b %d, %Y at %H:%M UTC') }}.</p>{% endif %}
+            {% if item.health_checked_at %}<p class="timestamp">Connection status checked {{ item.health_checked_at.strftime('%b %d, %Y at %H:%M:%S UTC') }}.</p>{% endif %}
+          </details>
+          {% if not demo_mode %}<div class="sync-status" aria-live="polite">
+            {% if item.sync_state == 'failed' %}
+              <p class="sync-error">Last sync failed. Saved transactions are preserved.
+                {% if item.connection_state == 'login_required' %}Use Reconnect to sign in to your bank again.
+                {% elif item.sync_error_code == 'ENCRYPTION_KEY_MISMATCH' %}Restore the original encryption key in .env and restart.
+                {% elif item.connection_state == 'consent_required' %}Use Reconnect to grant Transactions permission.
+                {% elif item.connection_state == 'revoked' %}Remove this saved connection before adding the bank again.
+                {% else %}Check the error reference and use Sync to retry.{% endif %}
+              </p>
+            {% elif item.sync_state == 'loading' %}
+              <p>Plaid is still preparing transaction history. Wait a moment, then use Sync.</p>
+            {% elif item.sync_state == 'never' %}
+              <p>{% if item.connection_state == 'connected' %}Transactions have not been imported yet. Use Sync to begin.{% else %}Load accounts first, then transaction sync can begin.{% endif %}</p>
+            {% elif not item.last_successful_sync_at %}
+              <p class="status">Latest available transaction updates saved.</p>
+            {% endif %}
+            {% if item.last_successful_sync_at %}
+              <p class="timestamp">Last successful sync: {{ item.last_successful_sync_at.strftime('%b %d, %Y at %H:%M:%S UTC') }}.</p>
+            {% endif %}
+          </div>{% endif %}
+        </article>
+        {% endfor %}
+      {% else %}
+      <div class="empty-state">
+        <span class="empty-icon" aria-hidden="true">▤</span>
+        <h3>A fresh start.</h3>
+        <p>Your linked accounts will appear here.<br>Use Connect Sandbox bank to try a simulated connection.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="connections activity-filters" aria-label="Activity filters">
+      <p class="filter-context">Choose a period for your spending overview and transactions.</p>
+      <form class="filters period-filters" method="get" action="/" aria-label="Date range">
+        <label>From<input type="date" name="start" value="{{ form.get('start', '') }}"></label>
+        <label>Through<input type="date" name="end" value="{{ form.get('end', '') }}"></label>
+        {% for name in ['q', 'category'] %}{% if form.get(name) %}<input type="hidden" name="{{ name }}" value="{{ form.get(name) }}">{% endif %}{% endfor %}
+        <input type="hidden" name="chart" value="{{ filters.chart }}">
+        <div class="filter-actions"><button class="secondary" type="submit">Apply dates</button><a href="{{ clear_dates_url }}" data-preserve-chart>All dates</a></div>
+      </form>
+      {% if filter_error %}<p class="filter-error" role="alert">{{ filter_error }} Correct the filters to see results.</p>{% endif %}
+    </section>
+
+    <section class="connections spending" aria-labelledby="spending-heading">
+      <div class="section-header">
+        <div><p class="eyebrow">Selected period</p><h2 id="spending-heading">Spending estimate</h2></div>
+        <p class="spending-total">${{ '{:,.2f}'.format(exploration.summary.amount) }} <span>USD posted outflows</span></p>
+      </div>
+      <div class="chart-controls">
+        <label for="chart-view">View spending by</label>
+        <select id="chart-view" name="chart"><option value="category" {% if filters.chart == 'category' %}selected{% endif %}>Category</option><option value="month" {% if filters.chart == 'month' %}selected{% endif %}>Month</option></select>
+      </div>
+      {% if chart_data.labels %}
+        <div class="chart-container"><canvas id="spending-chart" aria-label="{{ 'Monthly' if filters.chart == 'month' else 'Category' }} spending estimate in USD" role="img"></canvas></div>
+        <script id="spending-data" type="application/json">{{ chart_views|tojson }}</script>
+        <details class="chart-values"><summary>View exact amounts as a table</summary>
+          <table><caption class="sr-only">Exact USD spending amounts</caption><thead><tr><th id="spending-dimension" scope="col">{{ 'Month' if filters.chart == 'month' else 'Category' }}</th><th scope="col" class="amount">USD</th></tr></thead>
+          <tbody data-spending-view="month" {% if filters.chart != 'month' %}hidden{% endif %}>{% for row in exploration.by_month %}<tr><td>{{ row.label }}</td><td class="amount">${{ '{:,.2f}'.format(row.amount) }}</td></tr>{% endfor %}</tbody>
+          <tbody data-spending-view="category" {% if filters.chart != 'category' %}hidden{% endif %}>{% for row in exploration.by_category %}<tr><td>{{ row.label|replace('_', ' ')|title }}</td><td class="amount">${{ '{:,.2f}'.format(row.amount) }}</td></tr>{% endfor %}</tbody></table>
+        </details>
+      {% else %}<div class="transaction-empty"><h3>No posted spending to chart.</h3><p>{{ 'Choose a wider date range to see sample spending.' if demo_mode else 'Change the date range or sync available history. Pending activity and money in stay in the transaction table.' }}</p></div>{% endif %}
+      <p class="transaction-help">Includes {{ exploration.summary.count }} posted USD outflow{{ '' if exploration.summary.count == 1 else 's' }} for the selected period. Transaction search and category filters affect only the table below. Excludes pending transactions, refunds/money in, recognized transfers, and credit-card payments. Refunds are not netted against spending. Categorization is an estimate; {{ exploration.summary.uncertain }} included record{{ '' if exploration.summary.uncertain == 1 else 's' }} ha{{ 's' if exploration.summary.uncertain == 1 else 've' }} uncertain categorization.</p>
+    </section>
+
+    <section class="connections transactions" aria-labelledby="transactions-heading">
+      <div class="section-header">
+        <div><p class="eyebrow">Explore your activity</p><h2 id="transactions-heading">USD transactions</h2></div>
+        <span class="muted">{{ exploration.total }} matching · newest first</span>
+      </div>
+      <form class="filters" method="get" action="/" aria-label="Transaction filters">
+        <label class="search-field">Merchant or description
+          <input type="search" name="q" maxlength="120" value="{{ form.get('q', '') }}" placeholder="Search transactions">
+        </label>
+        <label>Category<select name="category">
+          <option value="">All categories</option>
+          {% for category in exploration.categories %}<option value="{{ category }}" {% if form.get('category') == category %}selected{% endif %}>{{ category|replace('_', ' ')|title }}</option>{% endfor %}
+        </select></label>
+        {% for name in ['start', 'end'] %}{% if form.get(name) %}<input type="hidden" name="{{ name }}" value="{{ form.get(name) }}">{% endif %}{% endfor %}
+        <input type="hidden" name="chart" value="{{ filters.chart }}">
+        <div class="filter-actions"><button class="secondary" type="submit">Apply filters</button><a href="{{ clear_transactions_url }}" data-preserve-chart>Clear</a></div>
+      </form>
+      {% if transactions %}
+      <div class="table-scroll" role="region" aria-label="Recent USD transactions" tabindex="0">
+        <table>
+          <caption class="sr-only">Filtered USD transactions, page {{ exploration.page }} of {{ exploration.pages }}. Positive Plaid amounts are outflows; negative amounts are inflows.</caption>
+          <thead><tr><th scope="col">Date</th><th scope="col">Merchant / description</th><th scope="col">Account</th><th scope="col">Category</th><th scope="col" class="amount">Amount</th></tr></thead>
+          <tbody>
+          {% for transaction in transactions %}
+            <tr>
+              <td class="nowrap">{{ transaction.transaction_date.strftime('%b %d, %Y') }}{% if transaction.pending %}<span class="pending-label">Pending</span>{% endif %}</td>
+              <td class="description">{{ transaction.merchant_name or transaction.original_description or 'Transaction' }}</td>
+              <td>{{ transaction.account_name }}</td>
+              <td>{{ (transaction.category_primary or 'Uncategorized')|replace('_', ' ')|title }}{% if transaction.category_primary and transaction.category_confidence not in ['HIGH', 'VERY_HIGH'] %}<span class="category-note">Estimated</span>{% endif %}</td>
+              <td class="amount {{ 'inflow' if transaction.amount < 0 else '' }}">{{ '+' if transaction.amount < 0 else '−' }}${{ '{:,.2f}'.format(transaction.amount|abs) }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="transaction-empty">
+        {% if filter_error %}
+          <h3>Check your filters.</h3><p>Use the message above, then apply the corrected filters.</p>
+        {% elif filters.query or filters.start or filters.end or filters.category %}
+          <h3>No matching transactions.</h3><p>Try a wider date range, another search, or Clear.</p>
+        {% elif not items %}
+          <h3>Your activity starts here.</h3><p>Connect a Sandbox bank to import its transactions.</p>
+        {% elif items|selectattr('sync_state', 'equalto', 'failed')|list %}
+          <h3>Transactions could not be loaded.</h3><p>Use the connection's error message and Sync button above to retry.</p>
+        {% elif items|selectattr('sync_state', 'equalto', 'loading')|list %}
+          <h3>Preparing your history.</h3><p>Plaid is still fetching simulated transactions. Wait a moment, then use Sync.</p>
+        {% elif items|selectattr('sync_state', 'equalto', 'never')|list %}
+          <h3>Ready for a first sync.</h3><p>Finish loading accounts if needed, then use Sync on a connection above.</p>
+        {% else %}
+          <h3>No USD transactions.</h3><p>The latest completed update contains no USD activity to display.</p>
+        {% endif %}
+      </div>
+      {% endif %}
+      <nav class="pagination" aria-label="Transaction pages">
+        <span>Page {{ exploration.page }} of {{ exploration.pages }} · {{ filters.page_size }} rows per page</span>
+        <div>{% if previous_url %}<a class="page-link" href="{{ previous_url }}" rel="prev">Previous</a>{% endif %}
+        {% if next_url %}<a class="page-link" href="{{ next_url }}" rel="next">Next</a>{% endif %}</div>
+      </nav>
+      <p class="transaction-help">+ Money in · − Money out. {{ 'Pending entries are excluded from spending totals. This demo retrieves no live banking data.' if demo_mode else 'Pending amounts may change. Sync retrieves Plaid\'s available updates; it does not force the bank to refresh.' }}</p>
+    </section>
+    <footer>Pocketview · Personal finance dashboard <span>{{ 'Fictional sample data' if demo_mode else 'Sandbox demo' }} · USD only</span></footer>
+    <noscript><p class="notice">{{ 'Enable JavaScript for interactive charts; exact amounts are available in the table.' if demo_mode else 'Enable JavaScript to connect a Sandbox bank through Plaid Link.' }}</p></noscript>
+  </main>
+</body>
+</html>
